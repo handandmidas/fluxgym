@@ -1,0 +1,55 @@
+# byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+
+# tests and coverage
+*.pytest_cache
+.coverage
+
+# database & logs
+*.db
+*.sqlite3
+*.log
+
+# core settings
+# /core/settings.py
+
+# venv
+env
+venv
+
+# other
+.DS_Store
+
+# javascript
+package-lock.json
+
+# static files
+staticfiles/*
+!staticfiles/.gitkeep
+.vscode/symbols.json
+
+# local certs
+cert.*
+key.*
+
+# node modules
+/node_modules
+package_lock.json
+
+# Certificates
+certs
+
+# Temporal
+temp/*
+
+# PyCharm
+.idea
+
+# Data files
+*.csv
+
+# Celery Beat
+# celerybeat-schedule
+
+.env
