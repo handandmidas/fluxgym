@@ -24,8 +24,8 @@ RUN git clone -b sd3 https://github.com/kohya-ss/sd-scripts
 #     && \
 #     cd sd-scripts && \
 #     pip install --no-cache-dir -r ./requirements.txt
-COPY ./sd-scripts/requirements.freeze.txt ./sd-scripts/
-RUN cd sd-scripts && pip install --no-cache-dir -r ./requirements.freeze.txt
+COPY ./requirements.sd-scripts.txt ./sd-scripts/
+RUN cd sd-scripts && pip install --no-cache-dir -r ./requirements.sd-scripts.txt
 
 # Install main application dependencies
 COPY ./requirements.txt ./requirements.txt
