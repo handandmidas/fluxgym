@@ -53,3 +53,5 @@ temp/*
 # celerybeat-schedule
 
 .env
+
+/sd-scripts

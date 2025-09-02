@@ -28,6 +28,10 @@ FluxGym supports 100% of Kohya sd-scripts features through an [Advanced](#advanc
 - September 16: Added "Publish to Huggingface" + 100% Kohya sd-scripts feature support: https://x.com/cocktailpeanut/status/1835719701172756592
 - September 11: Automatic Sample Image Generation + Custom Resolution: https://x.com/cocktailpeanut/status/1833881392482066638
 
+- (Sergien) Repaired Florence-2 support
+- (Sergien) Added Joy2Caption support
+- (Sergien) Repaired requirements.txt
+
 ---
 
 # Supported Models
@@ -123,7 +127,7 @@ pip install -r requirements.txt
 Finally, install pytorch Nightly:
 
 ```
-pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu122
 ```
 
 Or, in case of NVIDIA RTX 50-series (5090, etc.) you will need to install cu128 torch and update bitsandbytes to the latest:

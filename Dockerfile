@@ -29,13 +29,14 @@ COPY ./requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r ./requirements.txt
 
 # Install Torch, Torchvision, and Torchaudio for CUDA 12.2
-RUN pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu122/torch_stable.html
+RUN pip install torch==2.5.1 torchvision==0.20.1 torchaudio --extra-index-url https://download.pytorch.org/whl/cu121/torch_stable.html
+RUN pip install -U gradio gradio_client
 
 RUN chown -R appuser:appuser /app
 
 # delete redundant requirements.txt and sd-scripts directory within the container
-RUN rm -r ./sd-scripts
-RUN rm ./requirements.txt
+# RUN rm -r ./sd-scripts
+# RUN rm ./requirements.txt
 
 #Run application as non-root
 USER appuser

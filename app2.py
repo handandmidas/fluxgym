@@ -4,35 +4,24 @@ os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
 os.environ['GRADIO_ANALYTICS_ENABLED'] = '0'
 sys.path.insert(0, os.getcwd())
 sys.path.append(os.path.join(os.path.dirname(__file__), 'sd-scripts'))
-
-from accelerate import init_empty_weights, infer_auto_device_map
-from argparse import Namespace
+import subprocess
+import gradio as gr
+from PIL import Image
+import torch
+import uuid
+import shutil
+import json
+import yaml
+from slugify import slugify
+from transformers import AutoProcessor, AutoModelForCausalLM
 from gradio_logsview import LogsView, LogsViewRunner
 from huggingface_hub import hf_hub_download, HfApi
 from library import flux_train_utils, huggingface_util
-from pathlib import Path
-from PIL import Image
-from slugify import slugify
-from transformers import AutoProcessor, AutoModelForCausalLM, LlavaForConditionalGeneration, BitsAndBytesConfig, AutoConfig
-
-import gc
-import gradio as gr
-import json
-import re
-import shutil
-import subprocess
-import toml
-import torch
+from argparse import Namespace
 import train_network
-import uuid
-import yaml
-
-
+import toml
+import re
 MAX_IMAGES = 150
-
-HF_CACHE = Path("./models/cache/huggingface").expanduser().resolve()
-HF_CACHE.mkdir(parents=True, exist_ok=True)  # asegúrate de que exista
-print("Torch Hugginface caches are now at: ", str(HF_CACHE))
 
 with open('models.yaml', 'r') as file:
     models = yaml.safe_load(file)
@@ -278,227 +267,53 @@ def create_dataset(destination_folder, size, *inputs):
     return destination_folder
 
 
-def _extract_between_tags(s: str, start_tag: str, end_tag: str) -> str:
-    start = s.find(start_tag)
-    if start == -1:
-        return ""
-    start += len(start_tag)
-    end = s.find(end_tag, start)
-    if end == -1:
-        return ""
-    return s[start:end].strip()
-
-
-def _load_image(path_or_img, max_side=1024):
-    img = path_or_img if not isinstance(path_or_img, str) else Image.open(path_or_img).convert("RGB")
-    w, h = img.size
-    scale = max(w, h) / max_side
-    if scale > 1:
-        img = img.resize((int(w/scale), int(h/scale)), Image.LANCZOS)
-    return img
-
-
 def run_captioning(images, concept_sentence, *captions):
-    print("run_captioning")
+    print(f"run_captioning")
     print(f"concept sentence {concept_sentence}")
     print(f"captions {captions}")
-
+    #Load internally to not consume resources for training
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"device={device}")
-    dtype = torch.float16 if device == "cuda" else torch.float32
-
-    # model_id = "multimodalart/Florence-2-large-no-flash-attn"
-    model_id = "microsoft/Florence-2-large"
-
-    # --- load model & processor ---
+    torch_dtype = torch.float16
     model = AutoModelForCausalLM.from_pretrained(
-        model_id,
-        torch_dtype=dtype,
-        trust_remote_code=True,
-        attn_implementation="eager",   # avoid SDPA path that expects _supports_sdpa
-        low_cpu_mem_usage=True,
-        cache_dir = str(HF_CACHE),
+        "multimodalart/Florence-2-large-no-flash-attn", torch_dtype=torch_dtype, trust_remote_code=True
     ).to(device)
-    model.eval()
+    processor = AutoProcessor.from_pretrained("multimodalart/Florence-2-large-no-flash-attn", trust_remote_code=True)
 
-    processor = AutoProcessor.from_pretrained(
-        model_id, 
-        trust_remote_code=True,
-        cache_dir = str(HF_CACHE),
-    )
-
-    # --- normalize captions length ---
-    caps = list(captions)
-    if len(caps) < len(images):
-        caps.extend([""] * (len(images) - len(caps)))
-
-    # --- helpers ---
-    def _load_image(path_or_img, max_side=1024):
-        img = path_or_img if not isinstance(path_or_img, str) else Image.open(path_or_img).convert("RGB")
-        w, h = img.size
-        scale = max(w, h) / max_side
-        if scale > 1:
-            img = img.resize((int(w / scale), int(h / scale)), Image.LANCZOS)
-        return img
-
-    prompt = "<DETAILED_CAPTION>"
-
-    # --- generate captions, streaming via yield ---
-    with torch.inference_mode():
-        for i, src in enumerate(images):
-            try:
-                image = _load_image(src, max_side=1024)
-                inputs = processor(text=prompt, images=image, return_tensors="pt")
-                
-                # add a mask to avoid warnings if missing
-                if "attention_mask" not in inputs or inputs["attention_mask"] is None:
-                    inputs["attention_mask"] = torch.ones_like(inputs["input_ids"])
-                    
-                # Move to device & cast only float tensors
-                inputs = {k: (v.to(device) if not v.is_floating_point() else v.to(device, dtype)) for k, v in inputs.items()}
-
-                generated_ids = model.generate(
-                    input_ids=inputs["input_ids"],
-                    pixel_values=inputs["pixel_values"],
-                    attention_mask=inputs["attention_mask"],
-                    max_new_tokens=256,     # 1024 is overkill for captions
-                    num_beams=1,            # faster; set >1 if you really want beams
-                    do_sample=False,
-                    use_cache=False,
-                    # pad_token_id=getattr(model.generation_config, "pad_token_id", None),
-                    pad_token_id=model.config.eos_token_id
-                )
-
-                generated_text = processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
-                parsed = processor.post_process_generation(
-                    generated_text, task=prompt, image_size=image.size
-                ) or {}
-
-                text = parsed.get(prompt, "") or ""
-                if text.startswith("The image shows "):
-                    text = text[len("The image shows "):]
-
-                if concept_sentence:
-                    text = f"{concept_sentence} {text}".strip()
-
-                caps[i] = text
-            except Exception as e:
-                print(f"[caption error @ index {i}] {e}")
-                # keep previous content if any, else empty
-                caps[i] = caps[i] or ""
-
-            yield caps  # stream partial results
-
-    # --- cleanup ---
-    try:
-        model.to("cpu")
-        del model
-        del processor
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        gc.collect()
-    except Exception as _cleanup_err:
-        print(f"[cleanup warning] {_cleanup_err}")
-
-
-def run_captioning2(images, concept_sentence, *captions):
-    print("run_captioning")
-    print(f"concept sentence: {concept_sentence}")
-    print(f"captions (seed): {captions}")
-
-    assert torch.cuda.is_available(), "This 12GB setup expects a CUDA GPU."
-
-    model_name = "fancyfeast/llama-joycaption-alpha-two-hf-llava"
-
-    # Int8 quantization (LLM only). Keep vision tower/projector in float on GPU.
-    bnb_cfg = BitsAndBytesConfig(
-        load_in_8bit=True,
-        llm_int8_enable_fp32_cpu_offload=False,   # all on GPU; no offload
-        llm_int8_skip_modules=["vision_tower", "multi_modal_projector", "mm_projector"],
-    )
-
-    # Force the whole model onto the single GPU (no CPU/disk shards).
-    model = LlavaForConditionalGeneration.from_pretrained(
-        model_name,
-        trust_remote_code=True,
-        quantization_config=bnb_cfg,
-        device_map={"": "cuda:0"},   # everything on GPU
-        low_cpu_mem_usage=True,
-        cache_dir=str(HF_CACHE),
-    )
-    processor = AutoProcessor.from_pretrained(
-        model_name, 
-        trust_remote_code=True,
-        cache_dir=str(HF_CACHE),
-    )
-
-    # Ensure captions list matches images length
     captions = list(captions)
-    if len(captions) < len(images):
-        captions.extend([""] * (len(images) - len(captions)))
+    for i, image_path in enumerate(images):
+        print(captions[i])
+        if isinstance(image_path, str):  # If image is a file path
+            image = Image.open(image_path).convert("RGB")
 
-    # Static conversation
-    convo = [
-        {"role": "system", "content": "You are a helpful image captioner."},
-        {"role": "user", "content": "Write a long descriptive caption for this image in a formal tone."},
-    ]
-    convo_string = processor.apply_chat_template(convo, tokenize=False, add_generation_prompt=True)
+        prompt = "<DETAILED_CAPTION>"
+        inputs = processor(text=prompt, images=image, return_tensors="pt").to(device, torch_dtype)
+        print(f"inputs {inputs}")
 
-    try:
-        with torch.inference_mode():
-            for i, image_path in enumerate(images):
-                print(f"seed caption[{i}]: {captions[i]}")
-                image = _load_image(image_path, max_side=1024)
+        generated_ids = model.generate(
+            input_ids=inputs["input_ids"], pixel_values=inputs["pixel_values"], max_new_tokens=1024, num_beams=3
+        )
+        print(f"generated_ids {generated_ids}")
 
-                # Prepare inputs; push to GPU (single-device model).
-                inputs = processor(text=[convo_string], images=[image], return_tensors="pt")
-                inputs = {k: (v.to(model.device) if hasattr(v, "to") else v) for k, v in inputs.items()}
+        generated_text = processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
+        print(f"generated_text: {generated_text}")
+        parsed_answer = processor.post_process_generation(
+            generated_text, task=prompt, image_size=(image.width, image.height)
+        )
+        print(f"parsed_answer = {parsed_answer}")
+        caption_text = parsed_answer["<DETAILED_CAPTION>"].replace("The image shows ", "")
+        print(f"caption_text = {caption_text}, concept_sentence={concept_sentence}")
+        if concept_sentence:
+            caption_text = f"{concept_sentence} {caption_text}"
+        captions[i] = caption_text
 
-                # Generation tuned for 12GB (keeps memory comfy)
-                out_ids = model.generate(
-                    input_ids=inputs["input_ids"],
-                    pixel_values=inputs["pixel_values"],
-                    max_new_tokens=192,          # safe length for 12 GB
-                    do_sample=True,
-                    temperature=0.6,
-                    top_p=0.9,
-                    use_cache=True,
-                )[0]
+        yield captions
+    model.to("cpu")
+    del model
+    del processor
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
-                # Trim prompt
-                prompt_len = inputs["input_ids"].shape[1]
-                gen_ids = out_ids[prompt_len:]
-
-                # Decode
-                text = processor.tokenizer.decode(
-                    gen_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
-                ).strip()
-
-                # Prefer tagged caption; fallback to full text (clean common lead-in)
-                caption_text = _extract_between_tags(text, "<DETAILED_CAPTION>", "</DETAILED_CAPTION>")
-                if not caption_text:
-                    caption_text = text
-                    if caption_text.startswith("The image shows "):
-                        caption_text = caption_text[len("The image shows "):]
-
-                if concept_sentence:
-                    caption_text = f"{concept_sentence} {caption_text}".strip()
-
-                captions[i] = caption_text
-                print(f"caption[{i}] = {caption_text}")
-
-                yield captions
-    finally:
-        try:
-            model.to("cpu")
-        except Exception:
-            pass
-        del model
-        del processor
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()            
- 
 def recursive_update(d, u):
     for k, v in u.items():
         if isinstance(v, dict) and v:
@@ -595,14 +410,14 @@ def gen_sh(
 
 
     ############# Optimizer args ########################
-    if vram == "8G":
-        optimizer = f"""--optimizer_type adafactor {line_break}
-  --optimizer_args "relative_step=False" "scale_parameter=False" "warmup_init=False" {line_break}
-  --split_mode {line_break}
-  --network_args "train_blocks=single" {line_break}
-  --lr_scheduler constant_with_warmup {line_break}
-  --max_grad_norm 0.0 {line_break}"""
-    elif vram == "16G":
+#    if vram == "8G":
+#        optimizer = f"""--optimizer_type adafactor {line_break}
+#    --optimizer_args "relative_step=False" "scale_parameter=False" "warmup_init=False" {line_break}
+#        --split_mode {line_break}
+#        --network_args "train_blocks=single" {line_break}
+#        --lr_scheduler constant_with_warmup {line_break}
+#        --max_grad_norm 0.0 {line_break}"""
+    if vram == "16G":
         # 16G VRAM
         optimizer = f"""--optimizer_type adafactor {line_break}
   --optimizer_args "relative_step=False" "scale_parameter=False" "warmup_init=False" {line_break}
@@ -1090,6 +905,7 @@ function () {
     });
   });
 }
+
 """
 
 current_account = account_hf()
@@ -1101,7 +917,7 @@ with gr.Blocks(elem_id="app", theme=theme, css=css, fill_width=True) as demo:
             output_components = []
             with gr.Row():
                 gr.HTML("""<nav>
-            <img id='logo' src='/file=icon.png' width='80' height='80'>
+            <img id='logo' src='file=icon.png' width='80' height='80'>
             <div class='flexible'></div>
             <button id='autoscroll' class='on hidden'></button>
         </nav>
@@ -1127,7 +943,7 @@ with gr.Blocks(elem_id="app", theme=theme, css=css, fill_width=True) as demo:
                     model_names = list(models.keys())
                     print(f"model_names={model_names}")
                     base_model = gr.Dropdown(label="Base model (edit the models.yaml file to add more to this list)", choices=model_names, value=model_names[0])
-                    vram = gr.Radio(["20G", "16G", "12G", "8G"], value="20G", label="VRAM", interactive=True)
+                    vram = gr.Radio(["20G", "16G", "12G" ], value="20G", label="VRAM", interactive=True)
                     num_repeats = gr.Number(value=10, precision=0, label="Repeat trains per image", interactive=True)
                     max_train_epochs = gr.Number(label="Max Train Epochs", value=16, interactive=True)
                     total_steps = gr.Number(0, interactive=False, label="Expected training steps")
@@ -1151,7 +967,6 @@ with gr.Blocks(elem_id="app", theme=theme, css=css, fill_width=True) as demo:
                         )
                     with gr.Group(visible=False) as captioning_area:
                         do_captioning = gr.Button("Add AI captions with Florence-2")
-                        do_captioning2 = gr.Button("Add AI captions with Joy2Caption")
                         output_components.append(captioning_area)
                         #output_components = [captioning_area]
                         caption_list = []
@@ -1264,6 +1079,7 @@ with gr.Blocks(elem_id="app", theme=theme, css=css, fill_width=True) as demo:
         sample_every_n_steps,
         *advanced_components
     ]
+    # Dispara update cuando cambie cualquier control relevante
     for comp in listeners:
         try:
             comp.change(
@@ -1273,7 +1089,7 @@ with gr.Blocks(elem_id="app", theme=theme, css=css, fill_width=True) as demo:
             )
         except Exception:
             # Algunos componentes (p.ej. Markdown) no tienen .change; los ignoramos
-            pass       
+            pass    
     
     advanced_component_ids = [x.elem_id for x in advanced_components]
     original_advanced_component_values = [comp.value for comp in advanced_components]
@@ -1329,18 +1145,12 @@ with gr.Blocks(elem_id="app", theme=theme, css=css, fill_width=True) as demo:
         outputs=terminal,
     )
     do_captioning.click(fn=run_captioning, inputs=[images, concept_sentence] + caption_list, outputs=caption_list)
-    do_captioning2.click(fn=run_captioning2, inputs=[images, concept_sentence] + caption_list, outputs=caption_list)
     demo.load(
-            fn=loaded, 
-            js=js, 
-            outputs=[hf_token, hf_login, hf_logout, repo_owner]
-        )
-    refresh.click(
-            update, 
-            inputs=listeners, 
-            outputs=[train_script, train_config, dataset_folder]
-        )
-
+        fn=loaded, 
+        js=js, 
+        outputs=[hf_token, hf_login, hf_logout, repo_owner]
+    )
+    refresh.click(update, inputs=listeners, outputs=[train_script, train_config, dataset_folder])
 if __name__ == "__main__":
     cwd = os.path.dirname(os.path.abspath(__file__))
     demo.launch(debug=True, show_error=True, allowed_paths=[cwd])
