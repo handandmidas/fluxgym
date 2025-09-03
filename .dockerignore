@@ -13,4 +13,4 @@ venv/
 **/.github
 **/.vscode
 **/*.ps1
-sd-scripts/
+# sd-scripts/

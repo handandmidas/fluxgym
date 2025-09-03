@@ -20,17 +20,17 @@ RUN useradd -m -s /bin/sh -u "${PUID}" -g "${PGID}" appuser
 WORKDIR /app
 
 # Get sd-scripts from kohya-ss and install them
-RUN git clone -b sd3 https://github.com/kohya-ss/sd-scripts && \
-    cd sd-scripts && \
-    pip install --no-cache-dir -r ./requirements.txt
+# RUN git clone -b sd3 https://github.com/kohya-ss/sd-scripts && \
+#     cd sd-scripts && \
+#    pip install --no-cache-dir -r ./requirements.txt
 
 # Install main application dependencies
-COPY ./requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r ./requirements.txt
+# COPY ./requirements.txt ./requirements.txt
+# RUN pip install --no-cache-dir -r ./requirements.txt
 
 # Install Torch, Torchvision, and Torchaudio for CUDA 12.2
-RUN pip install torch==2.5.1 torchvision==0.20.1 torchaudio --extra-index-url https://download.pytorch.org/whl/cu121/torch_stable.html
-RUN pip install -U gradio gradio_client
+# RUN pip install torch==2.5.1 torchvision==0.20.1 torchaudio --extra-index-url https://download.pytorch.org/whl/cu121/torch_stable.html
+# RUN pip install -U gradio gradio_client
 
 # delete redundant requirements.txt and sd-scripts directory within the container
 # RUN rm -r ./env
