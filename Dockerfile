@@ -5,6 +5,8 @@ FROM nvidia/cuda:12.2.2-base-ubuntu22.04
 RUN apt-get update -y && apt-get install -y \
     python3-pip \
     python3-dev \
+    wget \
+    vim \
     git \
     build-essential  # Install dependencies for building extensions
 

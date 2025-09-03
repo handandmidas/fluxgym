@@ -5,6 +5,7 @@ bitsandbytes_windows_deprecated/
 dataset/
 __pycache__/
 venv/
+env/
 **/.hadolint.yml
 **/*.log
 **/.git
